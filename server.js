@@ -63,7 +63,20 @@ function getImageFiles(folderPath) {
     return isFile(full) && IMAGE_EXTS.has(path.extname(name).toLowerCase());
   });
 
-  return naturalSort(files);
+  // in server.js, inside getImageFiles()
+
+return naturalSort(files).map((name) => {
+  const fullPath = path.join(folderPath, name);
+  const stats = fs.statSync(fullPath);
+
+  return {
+    name,
+    mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
+    width: 1,
+    height: 1
+  };
+  });
 }
 
 function findCoverFile(folderPath) {
@@ -75,7 +88,7 @@ function findCoverFile(folderPath) {
   }
 
   const images = getImageFiles(folderPath);
-  return images[0] || null;
+  return images[0]?.name || null;
 }
 
 function getDisplayTitle(folderPath, folderName) {

@@ -11,7 +11,20 @@
   <main class="page">
     <header class="topbar">
       <a class="back-btn" href="library.html">← Back</a>
-      <h1 id="page-title">Folder</h1>
+
+      <div class="folder-header-text">
+        <h1 id="page-title">Folder</h1>
+      </div>
+
+      <div class="sort-wrap">
+        <label for="sort-select">Sort</label>
+        <select id="sort-select">
+          <option value="name-asc">Name A-Z</option>
+          <option value="name-desc">Name Z-A</option>
+          <option value="date-asc">Date old-new</option>
+          <option value="date-desc">Date new-old</option>
+        </select>
+      </div>
     </header>
 
     <section id="image-grid" class="image-grid"></section>
