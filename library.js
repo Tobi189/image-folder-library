@@ -1,15 +1,49 @@
 const grid = document.getElementById('library-grid');
+const sortSelect = document.getElementById('library-sort-select');
 
-async function loadLibrary() {
-  const res = await fetch('/api/library');
-  const items = await res.json();
+let allItems = [];
 
+function sortLibraryItems(items, sortValue) {
+  const arr = [...items];
+
+  switch (sortValue) {
+    case 'name-desc':
+      return arr.sort((a, b) =>
+        b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' })
+      );
+
+    case 'count-asc':
+      return arr.sort((a, b) => {
+        const diff = (a.mediaCount || 0) - (b.mediaCount || 0);
+        if (diff !== 0) return diff;
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
+    case 'count-desc':
+      return arr.sort((a, b) => {
+        const diff = (b.mediaCount || 0) - (a.mediaCount || 0);
+        if (diff !== 0) return diff;
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
+    case 'name-asc':
+    default:
+      return arr.sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+      );
+  }
+}
+
+function renderLibrary(items) {
   if (!items.length) {
     grid.innerHTML = `<div class="empty-state">No folders found in /library</div>`;
     return;
   }
 
-  grid.innerHTML = items
+  const sortValue = sortSelect?.value || localStorage.getItem('library:sort') || 'name-asc';
+  const sortedItems = sortLibraryItems(items, sortValue);
+
+  grid.innerHTML = sortedItems
     .map((item) => {
       const coverUrl = item.cover
         ? `/media?folder=${encodeURIComponent(item.folder)}&file=${encodeURIComponent(item.cover)}`
@@ -37,13 +71,20 @@ async function loadLibrary() {
         <a class="library-card" href="folder.html?folder=${encodeURIComponent(item.folder)}">
           ${coverMarkup}
           <div class="library-meta">
-            <div class="library-title">${escapeHtml(item.name)}<\/div>
-            <div class="library-count">${countText}<\/div>
+            <div class="library-title">${escapeHtml(item.name)}</div>
+            <div class="library-count">${countText}</div>
           </div>
         </a>
       `;
     })
     .join('');
+}
+
+async function loadLibrary() {
+  const res = await fetch('/api/library');
+  const items = await res.json();
+  allItems = items;
+  renderLibrary(allItems);
 }
 
 function isVideoFile(name) {
@@ -57,6 +98,14 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+if (sortSelect) {
+  sortSelect.value = localStorage.getItem('library:sort') || 'name-asc';
+  sortSelect.addEventListener('change', () => {
+    localStorage.setItem('library:sort', sortSelect.value);
+    renderLibrary(allItems);
+  });
 }
 
 loadLibrary().catch((err) => {

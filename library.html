@@ -1,4 +1,3 @@
-<!-- library.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,6 +10,16 @@
   <main class="page">
     <header class="topbar">
       <h1>Library</h1>
+
+      <div class="sort-wrap">
+        <label for="library-sort-select">Sort</label>
+        <select id="library-sort-select">
+          <option value="name-asc">Name A-Z</option>
+          <option value="name-desc">Name Z-A</option>
+          <option value="count-desc">Most media</option>
+          <option value="count-asc">Least media</option>
+        </select>
+      </div>
     </header>
 
     <section id="library-grid" class="library-grid"></section>
