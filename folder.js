@@ -37,6 +37,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   sortSelect.addEventListener('change', () => {
     renderMasonry(allMedia, folder, sortSelect.value, gridEl);
+    
     localStorage.setItem('sort:' + folder, sortSelect.value);
   });
 
@@ -87,6 +88,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
 
     renderMasonry(allMedia, folder, sortSelect.value, gridEl);
+
+fetch('/api/folder-warm-thumbs?folder=' + encodeURIComponent(folder), {
+  method: 'POST'
+}).catch((err) => {
+  console.warn('Failed to start thumb warm-up:', err);
+});
 
     window.addEventListener('resize', debounce(() => {
       renderMasonry(allMedia, folder, sortSelect.value, gridEl);
@@ -180,6 +187,20 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     setZoom(1);
   }
+
+  function stopThumbWarm() {
+  if (!folder) return;
+
+  fetch('/api/folder-stop-warm-thumbs?folder=' + encodeURIComponent(folder), {
+    method: 'POST',
+    keepalive: true
+  }).catch((err) => {
+    console.warn('Failed to stop thumb warm-up:', err);
+  });
+}
+
+window.addEventListener('pagehide', stopThumbWarm);
+window.addEventListener('beforeunload', stopThumbWarm);
 
   function setZoom(value) {
     const item = displayedMedia[currentIndex];

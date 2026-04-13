@@ -12,10 +12,26 @@ const DATA_DIR = path.join(APP_ROOT, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 const THUMBS_ROOT = path.join(APP_ROOT, 'thumbs');
 
-const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp']);
+const thumbWarmJobs = new Map();
+const thumbWarmStatus = new Map();
+const thumbWarmCancel = new Map();
+
+const IMAGE_EXTS = new Set([
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+  '.gif',
+  '.bmp',
+  '.jfif',
+  '.avif',
+  '.tif',
+  '.tiff',
+  '.heic'
+]);
+
 const VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogg']);
 const MEDIA_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS]);
-
 const COVER_NAMES = ['001', '01', '1', 'cover'];
 const TITLE_FILES = ['title.txt', '_title.txt', 'name.txt', '_name.txt'];
 
@@ -67,6 +83,98 @@ function getMediaType(name) {
   if (IMAGE_EXTS.has(ext)) return 'image';
   if (VIDEO_EXTS.has(ext)) return 'video';
   return null;
+}
+
+function getFastMediaSummary(folderPath) {
+  if (!isDir(folderPath)) {
+    return {
+      mediaCount: 0,
+      imageCount: 0,
+      videoCount: 0,
+      firstMedia: null
+    };
+  }
+
+  const files = naturalSort(
+    fs.readdirSync(folderPath).filter((name) => {
+      const full = path.join(folderPath, name);
+      return isFile(full) && MEDIA_EXTS.has(path.extname(name).toLowerCase());
+    })
+  );
+
+  let imageCount = 0;
+  let videoCount = 0;
+
+  for (const name of files) {
+    const type = getMediaType(name);
+    if (type === 'image') imageCount++;
+    else if (type === 'video') videoCount++;
+  }
+
+  return {
+    mediaCount: files.length,
+    imageCount,
+    videoCount,
+    firstMedia: files[0] || null
+  };
+}
+
+function findCoverFileFast(folderPath) {
+  for (const base of COVER_NAMES) {
+    for (const ext of IMAGE_EXTS) {
+      const candidate = path.join(folderPath, `${base}${ext}`);
+      if (isFile(candidate)) return path.basename(candidate);
+    }
+  }
+
+  const summary = getFastMediaSummary(folderPath);
+  return summary.firstMedia;
+}
+
+function getFastMediaSummary(folderPath) {
+  if (!isDir(folderPath)) {
+    return {
+      mediaCount: 0,
+      imageCount: 0,
+      videoCount: 0,
+      firstMedia: null
+    };
+  }
+
+  const files = naturalSort(
+    fs.readdirSync(folderPath).filter((name) => {
+      const full = path.join(folderPath, name);
+      return isFile(full) && MEDIA_EXTS.has(path.extname(name).toLowerCase());
+    })
+  );
+
+  let imageCount = 0;
+  let videoCount = 0;
+
+  for (const name of files) {
+    const type = getMediaType(name);
+    if (type === 'image') imageCount++;
+    else if (type === 'video') videoCount++;
+  }
+
+  return {
+    mediaCount: files.length,
+    imageCount,
+    videoCount,
+    firstMedia: files[0] || null
+  };
+}
+
+function findCoverFileFast(folderPath) {
+  for (const base of COVER_NAMES) {
+    for (const ext of IMAGE_EXTS) {
+      const candidate = path.join(folderPath, `${base}${ext}`);
+      if (isFile(candidate)) return path.basename(candidate);
+    }
+  }
+
+  const summary = getFastMediaSummary(folderPath);
+  return summary.firstMedia;
 }
 
 async function getImageSize(filePath) {
@@ -184,8 +292,8 @@ function writeState(state) {
 }
 
 function getThumbRelativePath(folder, file) {
-  const parsed = path.parse(file);
-  return path.join(folder, `${parsed.name}.jpg`);
+  const safeName = file.replace(/[^a-z0-9._-]+/gi, '_');
+  return path.join(folder, `${safeName}.thumb.jpg`);
 }
 
 async function ensureImageThumb(folder, file) {
@@ -229,6 +337,93 @@ async function ensureImageThumb(folder, file) {
   return thumbPath;
 }
 
+function listImageFilesFast(folderPath) {
+  if (!isDir(folderPath)) return [];
+
+  return naturalSort(
+    fs.readdirSync(folderPath).filter((name) => {
+      const full = path.join(folderPath, name);
+      return isFile(full) && IMAGE_EXTS.has(path.extname(name).toLowerCase());
+    })
+  );
+}
+
+async function warmFolderThumbs(folder) {
+  let folderPath;
+  try {
+    folderPath = safeJoin(LIBRARY_ROOT, folder);
+  } catch {
+    return;
+  }
+
+  if (!isDir(folderPath)) return;
+
+  const imageFiles = listImageFilesFast(folderPath);
+
+  const status = {
+    folder,
+    startedAt: Date.now(),
+    finishedAt: null,
+    canceledAt: null,
+    totalImages: imageFiles.length,
+    processed: 0,
+    createdOrReady: 0,
+    failed: 0,
+    failedFiles: []
+  };
+
+  thumbWarmStatus.set(folder, status);
+  thumbWarmCancel.set(folder, false);
+
+  for (const file of imageFiles) {
+    if (thumbWarmCancel.get(folder)) {
+      status.canceledAt = Date.now();
+      break;
+    }
+
+    try {
+      await ensureImageThumb(folder, file);
+      status.createdOrReady += 1;
+    } catch (err) {
+      status.failed += 1;
+      status.failedFiles.push({
+        file,
+        error: err.message
+      });
+      console.warn('Thumb warm failed:', folder, file, err.message);
+    } finally {
+      status.processed += 1;
+    }
+  }
+
+  status.finishedAt = Date.now();
+}
+
+function queueFolderThumbWarm(folder) {
+  if (!folder) return false;
+  if (thumbWarmJobs.has(folder)) return false;
+
+  thumbWarmCancel.set(folder, false);
+
+  const job = warmFolderThumbs(folder)
+    .catch((err) => {
+      console.error('Folder thumb warm job failed:', folder, err);
+    })
+    .finally(() => {
+      thumbWarmJobs.delete(folder);
+      thumbWarmCancel.delete(folder);
+    });
+
+  thumbWarmJobs.set(folder, job);
+  return true;
+}
+
+function cancelFolderThumbWarm(folder) {
+  if (!folder || !thumbWarmJobs.has(folder)) return false;
+  thumbWarmCancel.set(folder, true);
+  return true;
+}
+
 app.get('/api/prefs', (req, res) => {
   res.json(readState());
 });
@@ -249,7 +444,7 @@ app.post('/api/prefs', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/library', async (req, res) => {
+app.get('/api/library', (req, res) => {
   try {
     if (!isDir(LIBRARY_ROOT)) {
       return res.json([]);
@@ -259,33 +454,40 @@ app.get('/api/library', async (req, res) => {
       return isDir(path.join(LIBRARY_ROOT, name));
     });
 
-    const result = await Promise.all(
-      naturalSort(folders).map(async (folder) => {
-        const folderPath = path.join(LIBRARY_ROOT, folder);
-        const media = await getMediaFiles(folderPath);
-        const cover = await findCoverFile(folderPath);
-        const title = getDisplayTitle(folderPath, folder);
+    const result = naturalSort(folders).map((folder) => {
+      const folderPath = path.join(LIBRARY_ROOT, folder);
+      const summary = getFastMediaSummary(folderPath);
+      const cover = findCoverFileFast(folderPath);
+      const title = getDisplayTitle(folderPath, folder);
 
-        const imageCount = media.filter((item) => item.type === 'image').length;
-        const videoCount = media.filter((item) => item.type === 'video').length;
-
-        return {
-          id: folder,
-          name: title,
-          folder,
-          cover,
-          imageCount,
-          videoCount,
-          mediaCount: media.length
-        };
-      })
-    );
+      return {
+        id: folder,
+        name: title,
+        folder,
+        cover,
+        imageCount: summary.imageCount,
+        videoCount: summary.videoCount,
+        mediaCount: summary.mediaCount
+      };
+    });
 
     res.json(result);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'failed to load library' });
   }
+});
+
+app.post('/api/folder-stop-warm-thumbs', (req, res) => {
+  const folder = req.query.folder;
+
+  if (!folder) {
+    return res.status(400).json({ error: 'folder is required' });
+  }
+
+  const stopped = cancelFolderThumbWarm(folder);
+
+  res.json({ ok: true, stopped });
 });
 
 app.get('/api/folder-images', async (req, res) => {
@@ -350,6 +552,29 @@ app.get('/api/folder-meta', async (req, res) => {
   }
 });
 
+app.post('/api/folder-warm-thumbs', (req, res) => {
+  const folder = req.query.folder;
+
+  if (!folder) {
+    return res.status(400).json({ error: 'folder is required' });
+  }
+
+  let folderPath;
+  try {
+    folderPath = safeJoin(LIBRARY_ROOT, folder);
+  } catch {
+    return res.status(400).json({ error: 'invalid folder' });
+  }
+
+  if (!isDir(folderPath)) {
+    return res.status(404).json({ error: 'folder not found' });
+  }
+
+  queueFolderThumbWarm(folder);
+
+  res.json({ ok: true, started: true });
+});
+
 app.get('/thumb', async (req, res) => {
   const folder = req.query.folder;
   const file = req.query.file;
@@ -358,12 +583,27 @@ app.get('/thumb', async (req, res) => {
     return res.status(400).send('missing params');
   }
 
+  let originalPath;
+  try {
+    originalPath = safeJoin(LIBRARY_ROOT, folder, file);
+  } catch {
+    return res.status(400).send('invalid path');
+  }
+
+  if (!isFile(originalPath)) {
+    return res.status(404).send('not found');
+  }
+
+  if (getMediaType(file) !== 'image') {
+    return res.status(400).send('not an image');
+  }
+
   try {
     const thumbPath = await ensureImageThumb(folder, file);
-    res.sendFile(thumbPath);
+    return res.sendFile(thumbPath);
   } catch (err) {
-    console.error(err);
-    res.status(400).send('thumbnail unavailable');
+    console.warn('Thumbnail generation failed, falling back to original:', file, err.message);
+    return res.sendFile(originalPath);
   }
 });
 
