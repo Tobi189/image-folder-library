@@ -1,4 +1,3 @@
-// folder.js
 window.addEventListener('DOMContentLoaded', async () => {
   const params = new URLSearchParams(window.location.search);
   const folder = params.get('folder');
@@ -9,6 +8,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   const viewerEl = document.getElementById('folderViewer');
   const viewerImgEl = document.getElementById('folderViewerImage');
+  const viewerVideoEl = document.getElementById('folderViewerVideo');
   const viewerCounterEl = document.getElementById('folderViewerCounter');
   const prevBtn = document.getElementById('folderViewerPrev');
   const nextBtn = document.getElementById('folderViewerNext');
@@ -19,7 +19,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   if (
     !titleEl || !gridEl || !sortSelect ||
-    !viewerEl || !viewerImgEl || !viewerCounterEl ||
+    !viewerEl || !viewerImgEl || !viewerVideoEl || !viewerCounterEl ||
     !prevBtn || !nextBtn || !closeBtn ||
     !zoomInBtn || !zoomOutBtn || !zoomResetBtn
   ) return;
@@ -30,13 +30,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  let allImages = [];
-  let displayedImages = [];
+  let allMedia = [];
+  let displayedMedia = [];
   let currentIndex = 0;
   let zoom = 1;
 
   sortSelect.addEventListener('change', () => {
-    renderMasonry(allImages, folder, sortSelect.value, gridEl);
+    renderMasonry(allMedia, folder, sortSelect.value, gridEl);
     localStorage.setItem('sort:' + folder, sortSelect.value);
   });
 
@@ -67,38 +67,38 @@ window.addEventListener('DOMContentLoaded', async () => {
   try {
     sortSelect.value = localStorage.getItem('sort:' + folder) || 'name-asc';
 
-    const [metaRes, imagesRes] = await Promise.all([
+    const [metaRes, mediaRes] = await Promise.all([
       fetch('/api/folder-meta?folder=' + encodeURIComponent(folder)),
       fetch('/api/folder-images?folder=' + encodeURIComponent(folder))
     ]);
 
-    if (!metaRes.ok || !imagesRes.ok) {
+    if (!metaRes.ok || !mediaRes.ok) {
       throw new Error('Failed to load folder');
     }
 
     const meta = await metaRes.json();
-    allImages = await imagesRes.json();
+    allMedia = await mediaRes.json();
 
     titleEl.textContent = meta.name || folder;
 
-    if (!Array.isArray(allImages) || allImages.length === 0) {
-      gridEl.innerHTML = '<div class="empty-state">No images inside this folder.</div>';
+    if (!Array.isArray(allMedia) || allMedia.length === 0) {
+      gridEl.innerHTML = '<div class="empty-state">No media inside this folder.</div>';
       return;
     }
 
-    renderMasonry(allImages, folder, sortSelect.value, gridEl);
+    renderMasonry(allMedia, folder, sortSelect.value, gridEl);
 
     window.addEventListener('resize', debounce(() => {
-      renderMasonry(allImages, folder, sortSelect.value, gridEl);
+      renderMasonry(allMedia, folder, sortSelect.value, gridEl);
     }, 150));
   } catch (err) {
     console.error(err);
     titleEl.textContent = 'Error';
-    gridEl.innerHTML = '<div class="empty-state">Failed to load images.</div>';
+    gridEl.innerHTML = '<div class="empty-state">Failed to load media.</div>';
   }
 
   function openViewer(index) {
-    displayedImages = sortImages(allImages, sortSelect.value);
+    displayedMedia = sortItems(allMedia, sortSelect.value);
     currentIndex = index;
     viewerEl.classList.remove('hidden');
     document.body.classList.add('folder-viewer-open');
@@ -108,41 +108,74 @@ window.addEventListener('DOMContentLoaded', async () => {
   function closeViewer() {
     viewerEl.classList.add('hidden');
     document.body.classList.remove('folder-viewer-open');
+
     viewerImgEl.src = '';
+    viewerImgEl.classList.add('hidden');
+
+    viewerVideoEl.pause();
+    viewerVideoEl.removeAttribute('src');
+    viewerVideoEl.load();
+    viewerVideoEl.classList.add('hidden');
+
     zoom = 1;
   }
 
   function showPrev() {
-    if (!displayedImages.length) return;
-    currentIndex = (currentIndex - 1 + displayedImages.length) % displayedImages.length;
+    if (!displayedMedia.length) return;
+    currentIndex = (currentIndex - 1 + displayedMedia.length) % displayedMedia.length;
     updateViewer();
   }
 
   function showNext() {
-    if (!displayedImages.length) return;
-    currentIndex = (currentIndex + 1) % displayedImages.length;
+    if (!displayedMedia.length) return;
+    currentIndex = (currentIndex + 1) % displayedMedia.length;
     updateViewer();
   }
 
   function updateViewer() {
-    const image = displayedImages[currentIndex];
-    if (!image) return;
+    const item = displayedMedia[currentIndex];
+    if (!item) return;
 
-    const src = '/img?folder=' + encodeURIComponent(folder) + '&file=' + encodeURIComponent(image.name);
-    viewerImgEl.src = src;
-    viewerImgEl.alt = image.name;
-    viewerCounterEl.textContent = `${currentIndex + 1} / ${displayedImages.length}`;
+    const src = '/media?folder=' + encodeURIComponent(folder) + '&file=' + encodeURIComponent(item.name);
+
+    viewerCounterEl.textContent = `${currentIndex + 1} / ${displayedMedia.length}`;
+
+    if (item.type === 'video') {
+      viewerImgEl.src = '';
+      viewerImgEl.classList.add('hidden');
+
+      viewerVideoEl.pause();
+      viewerVideoEl.src = src;
+      viewerVideoEl.classList.remove('hidden');
+      viewerVideoEl.load();
+    } else {
+      viewerVideoEl.pause();
+      viewerVideoEl.removeAttribute('src');
+      viewerVideoEl.load();
+      viewerVideoEl.classList.add('hidden');
+
+      viewerImgEl.src = src;
+      viewerImgEl.alt = item.name;
+      viewerImgEl.classList.remove('hidden');
+    }
+
     setZoom(1);
   }
 
   function setZoom(value) {
+    const item = displayedMedia[currentIndex];
     zoom = Math.max(0.2, Math.min(5, value));
-    viewerImgEl.style.transform = `scale(${zoom})`;
+
+    if (item?.type === 'image') {
+      viewerImgEl.style.transform = `scale(${zoom})`;
+    } else {
+      viewerVideoEl.style.transform = `scale(${zoom})`;
+    }
   }
 
-  function renderMasonry(images, folder, sortValue, gridEl) {
-    const sorted = sortImages(images, sortValue);
-    displayedImages = sorted;
+  function renderMasonry(items, folder, sortValue, gridEl) {
+    const sorted = sortItems(items, sortValue);
+    displayedMedia = sorted;
 
     const columnCount = getColumnCount(gridEl);
     gridEl.innerHTML = '';
@@ -157,31 +190,51 @@ window.addEventListener('DOMContentLoaded', async () => {
       columns.push(col);
     }
 
-    sorted.forEach((image, index) => {
+    sorted.forEach((item, index) => {
       const shortestIndex = heights.indexOf(Math.min(...heights));
-      const src = '/img?folder=' + encodeURIComponent(folder) + '&file=' + encodeURIComponent(image.name);
+      const src = '/media?folder=' + encodeURIComponent(folder) + '&file=' + encodeURIComponent(item.name);
 
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'image-tile folder-image-button';
       button.addEventListener('click', () => openViewer(index));
 
-      const img = document.createElement('img');
-      img.src = src;
-      img.alt = image.name;
-      img.loading = 'lazy';
+      if (item.type === 'video') {
+        const videoWrap = document.createElement('div');
+        videoWrap.className = 'video-thumb-wrap';
 
-      button.appendChild(img);
+        const video = document.createElement('video');
+        video.className = 'video-thumb';
+        video.src = src;
+        video.preload = 'metadata';
+        video.muted = true;
+        video.playsInline = true;
+
+        const badge = document.createElement('div');
+        badge.className = 'video-badge';
+        badge.textContent = '▶';
+
+        videoWrap.appendChild(video);
+        videoWrap.appendChild(badge);
+        button.appendChild(videoWrap);
+      } else {
+        const img = document.createElement('img');
+        img.src = src;
+        img.alt = item.name;
+        img.loading = 'lazy';
+        button.appendChild(img);
+      }
+
       columns[shortestIndex].appendChild(button);
 
-      const ratio = image.width && image.height ? image.height / image.width : 1.4;
+      const ratio = item.width && item.height ? item.height / item.width : 1.4;
       heights[shortestIndex] += ratio;
     });
   }
 });
 
-function sortImages(images, sortValue) {
-  const arr = [...images];
+function sortItems(items, sortValue) {
+  const arr = [...items];
 
   switch (sortValue) {
     case 'name-desc':

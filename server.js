@@ -1,4 +1,3 @@
-// server.js
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -12,6 +11,9 @@ const DATA_DIR = path.join(APP_ROOT, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp']);
+const VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogg']);
+const MEDIA_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS]);
+
 const COVER_NAMES = ['001', '01', '1', 'cover'];
 const TITLE_FILES = ['title.txt', '_title.txt', 'name.txt', '_name.txt'];
 
@@ -55,27 +57,34 @@ function naturalSort(items) {
   );
 }
 
-function getImageFiles(folderPath) {
+function getMediaType(name) {
+  const ext = path.extname(name).toLowerCase();
+  if (IMAGE_EXTS.has(ext)) return 'image';
+  if (VIDEO_EXTS.has(ext)) return 'video';
+  return null;
+}
+
+function getMediaFiles(folderPath) {
   if (!isDir(folderPath)) return [];
 
   const files = fs.readdirSync(folderPath).filter((name) => {
     const full = path.join(folderPath, name);
-    return isFile(full) && IMAGE_EXTS.has(path.extname(name).toLowerCase());
+    return isFile(full) && MEDIA_EXTS.has(path.extname(name).toLowerCase());
   });
 
-  // in server.js, inside getImageFiles()
+  return naturalSort(files).map((name) => {
+    const fullPath = path.join(folderPath, name);
+    const stats = fs.statSync(fullPath);
+    const type = getMediaType(name);
 
-return naturalSort(files).map((name) => {
-  const fullPath = path.join(folderPath, name);
-  const stats = fs.statSync(fullPath);
-
-  return {
-    name,
-    mtimeMs: stats.mtimeMs,
-    ctimeMs: stats.ctimeMs,
-    width: 1,
-    height: 1
-  };
+    return {
+      name,
+      type,
+      mtimeMs: stats.mtimeMs,
+      ctimeMs: stats.ctimeMs,
+      width: 1,
+      height: 1
+    };
   });
 }
 
@@ -87,8 +96,8 @@ function findCoverFile(folderPath) {
     }
   }
 
-  const images = getImageFiles(folderPath);
-  return images[0]?.name || null;
+  const media = getMediaFiles(folderPath);
+  return media[0]?.name || null;
 }
 
 function getDisplayTitle(folderPath, folderName) {
@@ -173,16 +182,21 @@ app.get('/api/library', (req, res) => {
 
   const result = naturalSort(folders).map((folder) => {
     const folderPath = path.join(LIBRARY_ROOT, folder);
-    const images = getImageFiles(folderPath);
+    const media = getMediaFiles(folderPath);
     const cover = findCoverFile(folderPath);
     const title = getDisplayTitle(folderPath, folder);
+
+    const imageCount = media.filter((item) => item.type === 'image').length;
+    const videoCount = media.filter((item) => item.type === 'video').length;
 
     return {
       id: folder,
       name: title,
       folder,
       cover,
-      imageCount: images.length
+      imageCount,
+      videoCount,
+      mediaCount: media.length
     };
   });
 
@@ -207,7 +221,7 @@ app.get('/api/folder-images', (req, res) => {
     return res.status(404).json({ error: 'folder not found' });
   }
 
-  res.json(getImageFiles(folderPath));
+  res.json(getMediaFiles(folderPath));
 });
 
 app.get('/api/folder-meta', (req, res) => {
@@ -228,13 +242,39 @@ app.get('/api/folder-meta', (req, res) => {
     return res.status(404).json({ error: 'folder not found' });
   }
 
+  const media = getMediaFiles(folderPath);
+
   res.json({
     id: folder,
     folder,
     name: getDisplayTitle(folderPath, folder),
     cover: findCoverFile(folderPath),
-    imageCount: getImageFiles(folderPath).length
+    imageCount: media.filter((item) => item.type === 'image').length,
+    videoCount: media.filter((item) => item.type === 'video').length,
+    mediaCount: media.length
   });
+});
+
+app.get('/media', (req, res) => {
+  const folder = req.query.folder;
+  const file = req.query.file;
+
+  if (!folder || !file) {
+    return res.status(400).send('missing params');
+  }
+
+  let filePath;
+  try {
+    filePath = safeJoin(LIBRARY_ROOT, folder, file);
+  } catch {
+    return res.status(400).send('invalid path');
+  }
+
+  if (!isFile(filePath)) {
+    return res.status(404).send('not found');
+  }
+
+  res.sendFile(filePath);
 });
 
 app.get('/img', (req, res) => {
@@ -254,6 +294,11 @@ app.get('/img', (req, res) => {
 
   if (!isFile(filePath)) {
     return res.status(404).send('not found');
+  }
+
+  const type = getMediaType(file);
+  if (type !== 'image') {
+    return res.status(400).send('not an image');
   }
 
   res.sendFile(filePath);
