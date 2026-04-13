@@ -111,11 +111,15 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     viewerImgEl.src = '';
     viewerImgEl.classList.add('hidden');
+    viewerImgEl.style.transform = 'scale(1)';
 
     viewerVideoEl.pause();
+    viewerVideoEl.currentTime = 0;
+    viewerVideoEl.onloadeddata = null;
     viewerVideoEl.removeAttribute('src');
     viewerVideoEl.load();
     viewerVideoEl.classList.add('hidden');
+    viewerVideoEl.style.transform = 'scale(1)';
 
     zoom = 1;
   }
@@ -143,20 +147,35 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (item.type === 'video') {
       viewerImgEl.src = '';
       viewerImgEl.classList.add('hidden');
+      viewerImgEl.style.transform = 'scale(1)';
 
       viewerVideoEl.pause();
-      viewerVideoEl.src = src;
+      viewerVideoEl.currentTime = 0;
+      viewerVideoEl.onloadeddata = null;
       viewerVideoEl.classList.remove('hidden');
+      viewerVideoEl.style.transform = 'scale(1)';
+
+      viewerVideoEl.onloadeddata = () => {
+        viewerVideoEl.play().catch((err) => {
+          console.warn('Autoplay blocked:', err);
+        });
+      };
+
+      viewerVideoEl.src = src;
       viewerVideoEl.load();
     } else {
       viewerVideoEl.pause();
+      viewerVideoEl.currentTime = 0;
+      viewerVideoEl.onloadeddata = null;
       viewerVideoEl.removeAttribute('src');
       viewerVideoEl.load();
       viewerVideoEl.classList.add('hidden');
+      viewerVideoEl.style.transform = 'scale(1)';
 
       viewerImgEl.src = src;
       viewerImgEl.alt = item.name;
       viewerImgEl.classList.remove('hidden');
+      viewerImgEl.style.transform = 'scale(1)';
     }
 
     setZoom(1);
