@@ -211,7 +211,11 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     sorted.forEach((item, index) => {
       const shortestIndex = heights.indexOf(Math.min(...heights));
-      const src = '/media?folder=' + encodeURIComponent(folder) + '&file=' + encodeURIComponent(item.name);
+
+      const gridSrc =
+        item.type === 'image'
+          ? '/thumb?folder=' + encodeURIComponent(folder) + '&file=' + encodeURIComponent(item.name)
+          : '/media?folder=' + encodeURIComponent(folder) + '&file=' + encodeURIComponent(item.name);
 
       const button = document.createElement('button');
       button.type = 'button';
@@ -224,7 +228,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
         const video = document.createElement('video');
         video.className = 'video-thumb';
-        video.src = src;
+        video.src = gridSrc;
         video.preload = 'metadata';
         video.muted = true;
         video.playsInline = true;
@@ -238,7 +242,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         button.appendChild(videoWrap);
       } else {
         const img = document.createElement('img');
-        img.src = src;
+        img.src = gridSrc;
         img.alt = item.name;
         img.loading = 'lazy';
         button.appendChild(img);

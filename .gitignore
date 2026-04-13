@@ -24,3 +24,5 @@ desktop.ini
 
 # Keep library folder out of git if it contains your image collections
 library/
+
+thumbs/

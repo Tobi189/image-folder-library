@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const sharp = require('sharp');
 
 const app = express();
 const PORT = 4321;
@@ -9,6 +10,7 @@ const APP_ROOT = __dirname;
 const LIBRARY_ROOT = path.join(APP_ROOT, 'library');
 const DATA_DIR = path.join(APP_ROOT, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
+const THUMBS_ROOT = path.join(APP_ROOT, 'thumbs');
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp']);
 const VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogg']);
@@ -16,6 +18,9 @@ const MEDIA_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS]);
 
 const COVER_NAMES = ['001', '01', '1', 'cover'];
 const TITLE_FILES = ['title.txt', '_title.txt', 'name.txt', '_name.txt'];
+
+const THUMB_WIDTH = 420;
+const THUMB_QUALITY = 78;
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(APP_ROOT, { index: 'library.html' }));
@@ -64,7 +69,19 @@ function getMediaType(name) {
   return null;
 }
 
-function getMediaFiles(folderPath) {
+async function getImageSize(filePath) {
+  try {
+    const meta = await sharp(filePath).metadata();
+    return {
+      width: meta.width || 1,
+      height: meta.height || 1
+    };
+  } catch {
+    return { width: 1, height: 1 };
+  }
+}
+
+async function getMediaFiles(folderPath) {
   if (!isDir(folderPath)) return [];
 
   const files = fs.readdirSync(folderPath).filter((name) => {
@@ -72,23 +89,38 @@ function getMediaFiles(folderPath) {
     return isFile(full) && MEDIA_EXTS.has(path.extname(name).toLowerCase());
   });
 
-  return naturalSort(files).map((name) => {
-    const fullPath = path.join(folderPath, name);
-    const stats = fs.statSync(fullPath);
-    const type = getMediaType(name);
+  const sorted = naturalSort(files);
 
-    return {
-      name,
-      type,
-      mtimeMs: stats.mtimeMs,
-      ctimeMs: stats.ctimeMs,
-      width: 1,
-      height: 1
-    };
-  });
+  const results = await Promise.all(
+    sorted.map(async (name) => {
+      const fullPath = path.join(folderPath, name);
+      const stats = fs.statSync(fullPath);
+      const type = getMediaType(name);
+
+      let width = 1;
+      let height = 1;
+
+      if (type === 'image') {
+        const size = await getImageSize(fullPath);
+        width = size.width;
+        height = size.height;
+      }
+
+      return {
+        name,
+        type,
+        mtimeMs: stats.mtimeMs,
+        ctimeMs: stats.ctimeMs,
+        width,
+        height
+      };
+    })
+  );
+
+  return results;
 }
 
-function findCoverFile(folderPath) {
+async function findCoverFile(folderPath) {
   for (const base of COVER_NAMES) {
     for (const ext of IMAGE_EXTS) {
       const candidate = path.join(folderPath, `${base}${ext}`);
@@ -96,7 +128,7 @@ function findCoverFile(folderPath) {
     }
   }
 
-  const media = getMediaFiles(folderPath);
+  const media = await getMediaFiles(folderPath);
   return media[0]?.name || null;
 }
 
@@ -151,6 +183,52 @@ function writeState(state) {
   fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2), 'utf8');
 }
 
+function getThumbRelativePath(folder, file) {
+  const parsed = path.parse(file);
+  return path.join(folder, `${parsed.name}.jpg`);
+}
+
+async function ensureImageThumb(folder, file) {
+  const originalPath = safeJoin(LIBRARY_ROOT, folder, file);
+
+  if (!isFile(originalPath)) {
+    throw new Error('Original not found');
+  }
+
+  if (getMediaType(file) !== 'image') {
+    throw new Error('Not an image');
+  }
+
+  const thumbRelative = getThumbRelativePath(folder, file);
+  const thumbPath = safeJoin(THUMBS_ROOT, thumbRelative);
+  const thumbDir = path.dirname(thumbPath);
+
+  ensureDir(THUMBS_ROOT);
+  ensureDir(thumbDir);
+
+  const originalStats = fs.statSync(originalPath);
+  const thumbExists = isFile(thumbPath);
+
+  let shouldRegenerate = !thumbExists;
+
+  if (thumbExists) {
+    const thumbStats = fs.statSync(thumbPath);
+    if (thumbStats.mtimeMs < originalStats.mtimeMs) {
+      shouldRegenerate = true;
+    }
+  }
+
+  if (shouldRegenerate) {
+    await sharp(originalPath)
+      .rotate()
+      .resize({ width: THUMB_WIDTH, withoutEnlargement: true })
+      .jpeg({ quality: THUMB_QUALITY })
+      .toFile(thumbPath);
+  }
+
+  return thumbPath;
+}
+
 app.get('/api/prefs', (req, res) => {
   res.json(readState());
 });
@@ -171,88 +249,122 @@ app.post('/api/prefs', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/library', (req, res) => {
-  if (!isDir(LIBRARY_ROOT)) {
-    return res.json([]);
+app.get('/api/library', async (req, res) => {
+  try {
+    if (!isDir(LIBRARY_ROOT)) {
+      return res.json([]);
+    }
+
+    const folders = fs.readdirSync(LIBRARY_ROOT).filter((name) => {
+      return isDir(path.join(LIBRARY_ROOT, name));
+    });
+
+    const result = await Promise.all(
+      naturalSort(folders).map(async (folder) => {
+        const folderPath = path.join(LIBRARY_ROOT, folder);
+        const media = await getMediaFiles(folderPath);
+        const cover = await findCoverFile(folderPath);
+        const title = getDisplayTitle(folderPath, folder);
+
+        const imageCount = media.filter((item) => item.type === 'image').length;
+        const videoCount = media.filter((item) => item.type === 'video').length;
+
+        return {
+          id: folder,
+          name: title,
+          folder,
+          cover,
+          imageCount,
+          videoCount,
+          mediaCount: media.length
+        };
+      })
+    );
+
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to load library' });
+  }
+});
+
+app.get('/api/folder-images', async (req, res) => {
+  const folder = req.query.folder;
+
+  if (!folder) {
+    return res.status(400).json({ error: 'folder is required' });
   }
 
-  const folders = fs.readdirSync(LIBRARY_ROOT).filter((name) => {
-    return isDir(path.join(LIBRARY_ROOT, name));
-  });
+  let folderPath;
+  try {
+    folderPath = safeJoin(LIBRARY_ROOT, folder);
+  } catch {
+    return res.status(400).json({ error: 'invalid folder' });
+  }
 
-  const result = naturalSort(folders).map((folder) => {
-    const folderPath = path.join(LIBRARY_ROOT, folder);
-    const media = getMediaFiles(folderPath);
-    const cover = findCoverFile(folderPath);
-    const title = getDisplayTitle(folderPath, folder);
+  if (!isDir(folderPath)) {
+    return res.status(404).json({ error: 'folder not found' });
+  }
 
-    const imageCount = media.filter((item) => item.type === 'image').length;
-    const videoCount = media.filter((item) => item.type === 'video').length;
+  try {
+    res.json(await getMediaFiles(folderPath));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to load folder media' });
+  }
+});
 
-    return {
+app.get('/api/folder-meta', async (req, res) => {
+  const folder = req.query.folder;
+
+  if (!folder) {
+    return res.status(400).json({ error: 'folder is required' });
+  }
+
+  let folderPath;
+  try {
+    folderPath = safeJoin(LIBRARY_ROOT, folder);
+  } catch {
+    return res.status(400).json({ error: 'invalid folder' });
+  }
+
+  if (!isDir(folderPath)) {
+    return res.status(404).json({ error: 'folder not found' });
+  }
+
+  try {
+    const media = await getMediaFiles(folderPath);
+
+    res.json({
       id: folder,
-      name: title,
       folder,
-      cover,
-      imageCount,
-      videoCount,
+      name: getDisplayTitle(folderPath, folder),
+      cover: await findCoverFile(folderPath),
+      imageCount: media.filter((item) => item.type === 'image').length,
+      videoCount: media.filter((item) => item.type === 'video').length,
       mediaCount: media.length
-    };
-  });
-
-  res.json(result);
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to load folder meta' });
+  }
 });
 
-app.get('/api/folder-images', (req, res) => {
+app.get('/thumb', async (req, res) => {
   const folder = req.query.folder;
+  const file = req.query.file;
 
-  if (!folder) {
-    return res.status(400).json({ error: 'folder is required' });
+  if (!folder || !file) {
+    return res.status(400).send('missing params');
   }
 
-  let folderPath;
   try {
-    folderPath = safeJoin(LIBRARY_ROOT, folder);
-  } catch {
-    return res.status(400).json({ error: 'invalid folder' });
+    const thumbPath = await ensureImageThumb(folder, file);
+    res.sendFile(thumbPath);
+  } catch (err) {
+    console.error(err);
+    res.status(400).send('thumbnail unavailable');
   }
-
-  if (!isDir(folderPath)) {
-    return res.status(404).json({ error: 'folder not found' });
-  }
-
-  res.json(getMediaFiles(folderPath));
-});
-
-app.get('/api/folder-meta', (req, res) => {
-  const folder = req.query.folder;
-
-  if (!folder) {
-    return res.status(400).json({ error: 'folder is required' });
-  }
-
-  let folderPath;
-  try {
-    folderPath = safeJoin(LIBRARY_ROOT, folder);
-  } catch {
-    return res.status(400).json({ error: 'invalid folder' });
-  }
-
-  if (!isDir(folderPath)) {
-    return res.status(404).json({ error: 'folder not found' });
-  }
-
-  const media = getMediaFiles(folderPath);
-
-  res.json({
-    id: folder,
-    folder,
-    name: getDisplayTitle(folderPath, folder),
-    cover: findCoverFile(folderPath),
-    imageCount: media.filter((item) => item.type === 'image').length,
-    videoCount: media.filter((item) => item.type === 'video').length,
-    mediaCount: media.length
-  });
 });
 
 app.get('/media', (req, res) => {
