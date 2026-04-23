@@ -16,12 +16,14 @@ window.addEventListener('DOMContentLoaded', async () => {
   const zoomInBtn = document.getElementById('folderZoomIn');
   const zoomOutBtn = document.getElementById('folderZoomOut');
   const zoomResetBtn = document.getElementById('folderZoomReset');
+  const slideshowToggleBtn = document.getElementById('folderSlideshowToggle');
 
   if (
     !titleEl || !gridEl || !sortSelect ||
     !viewerEl || !viewerImgEl || !viewerVideoEl || !viewerCounterEl ||
     !prevBtn || !nextBtn || !closeBtn ||
-    !zoomInBtn || !zoomOutBtn || !zoomResetBtn
+    !zoomInBtn || !zoomOutBtn || !zoomResetBtn ||
+    !slideshowToggleBtn
   ) return;
 
   if (!folder) {
@@ -35,18 +37,42 @@ window.addEventListener('DOMContentLoaded', async () => {
   let currentIndex = 0;
   let zoom = 1;
 
+  let slideshowEnabled = false;
+  let slideshowTimer = null;
+
+  const IMAGE_SLIDESHOW_DELAY = 3000;
+  const VIDEO_NEXT_DELAY = 2000;
+
   sortSelect.addEventListener('change', () => {
     renderMasonry(allMedia, folder, sortSelect.value, gridEl);
-    
     localStorage.setItem('sort:' + folder, sortSelect.value);
   });
 
-  prevBtn.addEventListener('click', showPrev);
-  nextBtn.addEventListener('click', showNext);
+  prevBtn.addEventListener('click', () => {
+    showPrev();
+    restartSlideshowIfNeeded();
+  });
+
+  nextBtn.addEventListener('click', () => {
+    showNext();
+    restartSlideshowIfNeeded();
+  });
+
   closeBtn.addEventListener('click', closeViewer);
   zoomInBtn.addEventListener('click', () => setZoom(zoom + 0.2));
   zoomOutBtn.addEventListener('click', () => setZoom(Math.max(0.2, zoom - 0.2)));
   zoomResetBtn.addEventListener('click', () => setZoom(1));
+
+  slideshowToggleBtn.addEventListener('click', () => {
+    slideshowEnabled = !slideshowEnabled;
+    updateSlideshowButton();
+
+    if (slideshowEnabled) {
+      scheduleSlideshowForCurrentItem();
+    } else {
+      clearSlideshowTimer();
+    }
+  });
 
   viewerEl.addEventListener('click', (event) => {
     if (event.target === viewerEl) {
@@ -58,11 +84,25 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (viewerEl.classList.contains('hidden')) return;
 
     if (event.key === 'Escape') closeViewer();
-    else if (event.key === 'ArrowLeft') showPrev();
-    else if (event.key === 'ArrowRight') showNext();
+    else if (event.key === 'ArrowLeft') {
+      showPrev();
+      restartSlideshowIfNeeded();
+    }
+    else if (event.key === 'ArrowRight') {
+      showNext();
+      restartSlideshowIfNeeded();
+    }
     else if (event.key === '+' || event.key === '=') setZoom(zoom + 0.2);
     else if (event.key === '-') setZoom(Math.max(0.2, zoom - 0.2));
     else if (event.key === '0') setZoom(1);
+    else if (event.key.toLowerCase() === ' ') {
+      event.preventDefault();
+      slideshowEnabled = !slideshowEnabled;
+      updateSlideshowButton();
+
+      if (slideshowEnabled) scheduleSlideshowForCurrentItem();
+      else clearSlideshowTimer();
+    }
   });
 
   try {
@@ -89,11 +129,11 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     renderMasonry(allMedia, folder, sortSelect.value, gridEl);
 
-fetch('/api/folder-warm-thumbs?folder=' + encodeURIComponent(folder), {
-  method: 'POST'
-}).catch((err) => {
-  console.warn('Failed to start thumb warm-up:', err);
-});
+    fetch('/api/folder-warm-thumbs?folder=' + encodeURIComponent(folder), {
+      method: 'POST'
+    }).catch((err) => {
+      console.warn('Failed to start thumb warm-up:', err);
+    });
 
     window.addEventListener('resize', debounce(() => {
       renderMasonry(allMedia, folder, sortSelect.value, gridEl);
@@ -113,6 +153,10 @@ fetch('/api/folder-warm-thumbs?folder=' + encodeURIComponent(folder), {
   }
 
   function closeViewer() {
+    clearSlideshowTimer();
+    slideshowEnabled = false;
+    updateSlideshowButton();
+
     viewerEl.classList.add('hidden');
     document.body.classList.remove('folder-viewer-open');
 
@@ -123,6 +167,7 @@ fetch('/api/folder-warm-thumbs?folder=' + encodeURIComponent(folder), {
     viewerVideoEl.pause();
     viewerVideoEl.currentTime = 0;
     viewerVideoEl.onloadeddata = null;
+    viewerVideoEl.onended = null;
     viewerVideoEl.removeAttribute('src');
     viewerVideoEl.load();
     viewerVideoEl.classList.add('hidden');
@@ -147,6 +192,8 @@ fetch('/api/folder-warm-thumbs?folder=' + encodeURIComponent(folder), {
     const item = displayedMedia[currentIndex];
     if (!item) return;
 
+    clearSlideshowTimer();
+
     const src = '/media?folder=' + encodeURIComponent(folder) + '&file=' + encodeURIComponent(item.name);
 
     viewerCounterEl.textContent = `${currentIndex + 1} / ${displayedMedia.length}`;
@@ -159,6 +206,7 @@ fetch('/api/folder-warm-thumbs?folder=' + encodeURIComponent(folder), {
       viewerVideoEl.pause();
       viewerVideoEl.currentTime = 0;
       viewerVideoEl.onloadeddata = null;
+      viewerVideoEl.onended = null;
       viewerVideoEl.classList.remove('hidden');
       viewerVideoEl.style.transform = 'scale(1)';
 
@@ -168,12 +216,20 @@ fetch('/api/folder-warm-thumbs?folder=' + encodeURIComponent(folder), {
         });
       };
 
+      viewerVideoEl.onended = () => {
+        if (!slideshowEnabled) return;
+        slideshowTimer = setTimeout(() => {
+          showNext();
+        }, VIDEO_NEXT_DELAY);
+      };
+
       viewerVideoEl.src = src;
       viewerVideoEl.load();
     } else {
       viewerVideoEl.pause();
       viewerVideoEl.currentTime = 0;
       viewerVideoEl.onloadeddata = null;
+      viewerVideoEl.onended = null;
       viewerVideoEl.removeAttribute('src');
       viewerVideoEl.load();
       viewerVideoEl.classList.add('hidden');
@@ -186,21 +242,8 @@ fetch('/api/folder-warm-thumbs?folder=' + encodeURIComponent(folder), {
     }
 
     setZoom(1);
+    scheduleSlideshowForCurrentItem();
   }
-
-  function stopThumbWarm() {
-  if (!folder) return;
-
-  fetch('/api/folder-stop-warm-thumbs?folder=' + encodeURIComponent(folder), {
-    method: 'POST',
-    keepalive: true
-  }).catch((err) => {
-    console.warn('Failed to stop thumb warm-up:', err);
-  });
-}
-
-window.addEventListener('pagehide', stopThumbWarm);
-window.addEventListener('beforeunload', stopThumbWarm);
 
   function setZoom(value) {
     const item = displayedMedia[currentIndex];
@@ -212,6 +255,50 @@ window.addEventListener('beforeunload', stopThumbWarm);
       viewerVideoEl.style.transform = `scale(${zoom})`;
     }
   }
+
+  function clearSlideshowTimer() {
+    if (slideshowTimer) {
+      clearTimeout(slideshowTimer);
+      slideshowTimer = null;
+    }
+  }
+
+  function updateSlideshowButton() {
+    slideshowToggleBtn.textContent = slideshowEnabled ? 'Pause' : 'Play';
+  }
+
+  function scheduleSlideshowForCurrentItem() {
+    clearSlideshowTimer();
+    if (!slideshowEnabled) return;
+
+    const item = displayedMedia[currentIndex];
+    if (!item) return;
+
+    if (item.type === 'image') {
+      slideshowTimer = setTimeout(() => {
+        showNext();
+      }, IMAGE_SLIDESHOW_DELAY);
+    }
+  }
+
+  function restartSlideshowIfNeeded() {
+    if (!slideshowEnabled) return;
+    scheduleSlideshowForCurrentItem();
+  }
+
+  function stopThumbWarm() {
+    if (!folder) return;
+
+    fetch('/api/folder-stop-warm-thumbs?folder=' + encodeURIComponent(folder), {
+      method: 'POST',
+      keepalive: true
+    }).catch((err) => {
+      console.warn('Failed to stop thumb warm-up:', err);
+    });
+  }
+
+  window.addEventListener('pagehide', stopThumbWarm);
+  window.addEventListener('beforeunload', stopThumbWarm);
 
   function renderMasonry(items, folder, sortValue, gridEl) {
     const sorted = sortItems(items, sortValue);
