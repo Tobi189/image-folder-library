@@ -12,6 +12,20 @@ function sortLibraryItems(items, sortValue) {
         b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' })
       );
 
+    case 'date-asc':
+      return arr.sort((a, b) => {
+        const diff = (a.oldestMtimeMs || 0) - (b.oldestMtimeMs || 0);
+        if (diff !== 0) return diff;
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
+    case 'date-desc':
+      return arr.sort((a, b) => {
+        const diff = (b.newestMtimeMs || 0) - (a.newestMtimeMs || 0);
+        if (diff !== 0) return diff;
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
     case 'count-asc':
       return arr.sort((a, b) => {
         const diff = (a.mediaCount || 0) - (b.mediaCount || 0);
@@ -32,6 +46,19 @@ function sortLibraryItems(items, sortValue) {
         a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
       );
   }
+}
+
+function isVideoFile(name) {
+  return /\.(mp4|webm|mov|m4v|ogg)$/i.test(name);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }
 
 function renderLibrary(items) {
@@ -85,19 +112,6 @@ async function loadLibrary() {
   const items = await res.json();
   allItems = items;
   renderLibrary(allItems);
-}
-
-function isVideoFile(name) {
-  return /\.(mp4|webm|mov|m4v|ogg)$/i.test(name);
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
 }
 
 if (sortSelect) {

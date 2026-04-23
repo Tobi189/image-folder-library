@@ -119,6 +119,43 @@ function getFastMediaSummary(folderPath) {
   };
 }
 
+function getFolderDateInfo(folderPath) {
+  if (!isDir(folderPath)) {
+    return {
+      newestMtimeMs: 0,
+      oldestMtimeMs: 0
+    };
+  }
+
+  const files = fs.readdirSync(folderPath).filter((name) => {
+    const full = path.join(folderPath, name);
+    return isFile(full) && MEDIA_EXTS.has(path.extname(name).toLowerCase());
+  });
+
+  if (!files.length) {
+    return {
+      newestMtimeMs: 0,
+      oldestMtimeMs: 0
+    };
+  }
+
+  let newestMtimeMs = 0;
+  let oldestMtimeMs = Number.POSITIVE_INFINITY;
+
+  for (const name of files) {
+    const full = path.join(folderPath, name);
+    const stats = fs.statSync(full);
+
+    if (stats.mtimeMs > newestMtimeMs) newestMtimeMs = stats.mtimeMs;
+    if (stats.mtimeMs < oldestMtimeMs) oldestMtimeMs = stats.mtimeMs;
+  }
+
+  return {
+    newestMtimeMs,
+    oldestMtimeMs: Number.isFinite(oldestMtimeMs) ? oldestMtimeMs : 0
+  };
+}
+
 function findCoverFileFast(folderPath) {
   for (const base of COVER_NAMES) {
     for (const ext of IMAGE_EXTS) {
@@ -424,6 +461,43 @@ function cancelFolderThumbWarm(folder) {
   return true;
 }
 
+app.get('/api/library', (req, res) => {
+  try {
+    if (!isDir(LIBRARY_ROOT)) {
+      return res.json([]);
+    }
+
+    const folders = fs.readdirSync(LIBRARY_ROOT).filter((name) => {
+      return isDir(path.join(LIBRARY_ROOT, name));
+    });
+
+    const result = naturalSort(folders).map((folder) => {
+      const folderPath = path.join(LIBRARY_ROOT, folder);
+      const summary = getFastMediaSummary(folderPath);
+      const cover = findCoverFileFast(folderPath);
+      const title = getDisplayTitle(folderPath, folder);
+      const dateInfo = getFolderDateInfo(folderPath);
+
+      return {
+        id: folder,
+        name: title,
+        folder,
+        cover,
+        imageCount: summary.imageCount,
+        videoCount: summary.videoCount,
+        mediaCount: summary.mediaCount,
+        newestMtimeMs: dateInfo.newestMtimeMs,
+        oldestMtimeMs: dateInfo.oldestMtimeMs
+      };
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to load library' });
+  }
+});
+
 app.get('/api/prefs', (req, res) => {
   res.json(readState());
 });
@@ -444,39 +518,7 @@ app.post('/api/prefs', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/library', (req, res) => {
-  try {
-    if (!isDir(LIBRARY_ROOT)) {
-      return res.json([]);
-    }
 
-    const folders = fs.readdirSync(LIBRARY_ROOT).filter((name) => {
-      return isDir(path.join(LIBRARY_ROOT, name));
-    });
-
-    const result = naturalSort(folders).map((folder) => {
-      const folderPath = path.join(LIBRARY_ROOT, folder);
-      const summary = getFastMediaSummary(folderPath);
-      const cover = findCoverFileFast(folderPath);
-      const title = getDisplayTitle(folderPath, folder);
-
-      return {
-        id: folder,
-        name: title,
-        folder,
-        cover,
-        imageCount: summary.imageCount,
-        videoCount: summary.videoCount,
-        mediaCount: summary.mediaCount
-      };
-    });
-
-    res.json(result);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'failed to load library' });
-  }
-});
 
 app.post('/api/folder-stop-warm-thumbs', (req, res) => {
   const folder = req.query.folder;
